@@ -54,6 +54,7 @@
 
 //#define BENCHMARK
 
+
 extern "C" {
 	void ASM c2p1x1_8_c5_bm_040(REG(d0, WORD chunkyx), REG(d1, WORD chunkyy), REG(d2, WORD offsx), REG(d3, WORD offsy), REG(a0, APTR chunkyscreen), REG(a1, struct BitMap *bitmap));
 	#define c2p_write_bm c2p1x1_8_c5_bm_040
@@ -145,7 +146,10 @@ namespace TFE_RenderBackend
 	static void showframe(void)
 	{
 		if (screen) {
-			currentBitMap ^= 1;
+			/* RTG writes directly to the visible screen bitmap. Native/C2P
+			 * output keeps the original double-buffered screen-flip path. */
+			if (!use_c2p && CyberGfxBase) currentBitMap = 0;
+			else currentBitMap ^= 1;
 			if (use_c2p) {
 				c2p_write_bm(s_virtualWidth, s_virtualHeight, 0, 0, s_curFrameBuffer, sbuf[currentBitMap]->sb_BitMap);
 			} else if (CyberGfxBase) {
@@ -168,8 +172,10 @@ namespace TFE_RenderBackend
 			} /*else {
 				WaitTOF();
 			}*/
-			if (ChangeScreenBuffer(screen, sbuf[currentBitMap])) {
-				safetochange = FALSE;
+			if (use_c2p || !CyberGfxBase) {
+				if (ChangeScreenBuffer(screen, sbuf[currentBitMap])) {
+					safetochange = FALSE;
+				}
 			}
 			/*
 			{
@@ -186,7 +192,6 @@ namespace TFE_RenderBackend
 				/*
 				if (!TFE_Input::relativeModeEnabled())
 				{
-					// update the colormap too if we are in the menu
 					ULONG *sp = &spal[1];
 					for (int i = 0; i < 256; i++)
 					{
