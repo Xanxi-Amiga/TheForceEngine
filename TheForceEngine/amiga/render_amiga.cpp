@@ -54,7 +54,6 @@
 
 //#define BENCHMARK
 
-
 extern "C" {
 	void ASM c2p1x1_8_c5_bm_040(REG(d0, WORD chunkyx), REG(d1, WORD chunkyy), REG(d2, WORD offsx), REG(d3, WORD offsy), REG(a0, APTR chunkyscreen), REG(a1, struct BitMap *bitmap));
 	#define c2p_write_bm c2p1x1_8_c5_bm_040
@@ -192,6 +191,7 @@ namespace TFE_RenderBackend
 				/*
 				if (!TFE_Input::relativeModeEnabled())
 				{
+					// update the colormap too if we are in the menu
 					ULONG *sp = &spal[1];
 					for (int i = 0; i < 256; i++)
 					{
