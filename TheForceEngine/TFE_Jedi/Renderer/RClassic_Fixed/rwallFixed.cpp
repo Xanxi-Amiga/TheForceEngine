@@ -862,6 +862,26 @@ namespace RClassic_Fixed
 
 		const s32 texWidth = texture ? texture->width : 0;
 		const JBool flipHorz = ((srcWall->flags1 & WF1_FLIP_HORIZ)!=0) ? JTRUE : JFALSE;
+
+#if defined(__AMIGA__) && defined(__mc68060__)
+		/* Hoist wall-invariant values out of the per-column loop on 68060.
+		 * The fixed-point equations and pixel results remain unchanged. */
+		const JBool dzDx = (wallSegment->orient == WORIENT_DZ_DX) ? JTRUE : JFALSE;
+		const fixed16_16 slope = wallSegment->slope;
+		const fixed16_16 baseCoord = dzDx ? wallSegment->x0View : z0;
+		const fixed16_16* columnRatio =
+			dzDx ? s_rcfState.column_Z_Over_X : s_rcfState.column_X_Over_Z;
+
+		const fixed16_16 uScaleFast = wallSegment->uScale;
+		const fixed16_16 uCoord0Fast = wallSegment->uCoord0 + srcWall->midOffset.x;
+		const s32 wallLight = floor16(srcWall->wallLight);
+
+		const f64 numeratorScaled = f64(numerator) * 65536.0;
+		const f64 slopeScaled = f64(slope) * (1.0 / 65536.0);
+		const f64 uScaleFastScaled = f64(uScaleFast) * (1.0 / 65536.0);
+		const f64 wallHeightTexelsScaled =
+			f64(srcWall->midTexelHeight) * 65536.0;
+#endif
 				
 		for (s32 i = 0; i < length; i++, x++)
 		{
@@ -874,6 +894,32 @@ namespace RClassic_Fixed
 			bot = min(bot, s_windowBot[x]);
 			s_yPixelCount = bot - top + 1;
 
+#if defined(__AMIGA__) && defined(__mc68060__)
+			fixed16_16 den = columnRatio[x] - slope;
+			if (den == 0) { den = 1; }
+
+			/*
+			 * div16(numerator, den), with numerator conversion/scaling hoisted.
+			 */
+			const fixed16_16 q = fixed16_16(numeratorScaled / f64(den));
+			const fixed16_16 delta = q - baseCoord;
+
+			fixed16_16 z;
+			if (dzDx)
+			{
+				/* z0 + mul16(delta, slope) */
+				z = z0 + fixed16_16(f64(delta) * slopeScaled);
+			}
+			else
+			{
+				z = q;
+			}
+			s_rcfState.depth1d[x] = z;
+
+			/* uCoord0 + mul16(delta, uScale) */
+			fixed16_16 uCoord =
+				uCoord0Fast + fixed16_16(f64(delta) * uScaleFastScaled);
+#else
 			fixed16_16 dxView = 0;
 			fixed16_16 z = solveForZ(wallSegment, x, numerator, &dxView);
 			s_rcfState.depth1d[x] = z;
@@ -881,6 +927,7 @@ namespace RClassic_Fixed
 			fixed16_16 uScale = wallSegment->uScale;
 			fixed16_16 uCoord0 = wallSegment->uCoord0 + srcWall->midOffset.x;
 			fixed16_16 uCoord = uCoord0 + ((wallSegment->orient == WORIENT_DZ_DX) ? mul16(dxView, uScale) : mul16(z - z0, uScale));
+#endif
 
 			if (s_yPixelCount > 0)
 			{
@@ -894,7 +941,12 @@ namespace RClassic_Fixed
 				fixed16_16 wallHeightTexels = srcWall->midTexelHeight;
 
 				// s_vCoordStep = tex coord "v" step per y pixel step -> dVdY;
+#if defined(__AMIGA__) && defined(__mc68060__)
+				s_vCoordStep =
+					fixed16_16(wallHeightTexelsScaled / f64(wallHeightPixels));
+#else
 				s_vCoordStep = div16(wallHeightTexels, wallHeightPixels);
+#endif
 
 				// texel offset from the actual fixed point y position and the truncated y position.
 				fixed16_16 vPixelOffset = y0F - intToFixed16(bot) + HALF_16;
@@ -906,7 +958,11 @@ namespace RClassic_Fixed
 
 				// Texture image data = imageStart + u * texHeight
 				s_texImage = texture->image + (texelU << texture->logSizeY);
+#if defined(__AMIGA__) && defined(__mc68060__)
+				s_columnLight = computeLighting(z, wallLight);
+#else
 				s_columnLight = computeLighting(z, floor16(srcWall->wallLight));
+#endif
 				// column write output.
 				s_columnOut = &s_display[top * s_width + x];
 
@@ -2391,6 +2447,44 @@ namespace RClassic_Fixed
 
 	void drawColumn_Lit()
 	{
+#if defined(__AMIGA__) && defined(__mc68060__)
+		/* Keep exact 16.16 stepping while reducing address and loop overhead
+		 * on 68060. Pixel order, texture lookup and lighting are unchanged. */
+		fixed16_16 vCoordFixed = s_vCoordFixed;
+		const fixed16_16 vStep = s_vCoordStep;
+		const u8* tex = s_texImage;
+		const u8* light = s_columnLight;
+		const s32 mask = s_texHeightMask;
+		s32 count = s_yPixelCount;
+
+		if (count <= 0)
+		{
+			return;
+		}
+
+		u8* out = s_columnOut + (count - 1) * 320;
+
+		while (count >= 2)
+		{
+			const s32 v0 = floor16(vCoordFixed) & mask;
+			vCoordFixed += vStep;
+			const s32 v1 = floor16(vCoordFixed) & mask;
+			vCoordFixed += vStep;
+
+			*out = light[tex[v0]];
+			out -= 320;
+			*out = light[tex[v1]];
+			out -= 320;
+
+			count -= 2;
+		}
+
+		if (count)
+		{
+			const s32 v0 = floor16(vCoordFixed) & mask;
+			*out = light[tex[v0]];
+		}
+#else
 		fixed16_16 vCoordFixed = s_vCoordFixed;
 		u8* tex = s_texImage;
 
@@ -2405,6 +2499,7 @@ namespace RClassic_Fixed
 			v = floor16(vCoordFixed) & s_texHeightMask;
 			s_columnOut[offset] = c;
 		}
+#endif
 	}
 
 	void drawColumn_Fullbright_Trans()
